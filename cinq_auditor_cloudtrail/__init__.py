@@ -15,7 +15,6 @@ class CloudTrailAuditor(BaseAuditor):
 
     Ensures that CloudTrail is enabled and logging to a central location and that SNS/SQS notifications are enabled
     and being sent to the correct queues for the CloudTrail Logs application
-    (https://cloudtrail-logs.service.riotgames.com/)
     """
 
     name = 'CloudTrail'
