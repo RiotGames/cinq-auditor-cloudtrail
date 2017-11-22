@@ -11,3 +11,22 @@ Please check out the `README <https://github.com/RiotGames/cloud-inquisitor/blob
 for further details on the how ``cinq-auditor-cloudtrail`` works 
 with further details on ``Cloud Inquisitor`` backend is built and what 
 technologies we use.
+
+=====================
+Configuration Options
+=====================
+
+
+=============     =============   ====    ======
+Option name       Default Value   Type    Description
+=============     =============   ====    ======
+enabled           False           bool    Enable the Cloudtrail auditor
+interval          60              int     Run frequency in minutes
+bucket_account    CHANGE ME       string  Name of the account (must exist) in which to create the S3 bucket where CloudTrail logs will be delivered
+bucket_name       CHANGE ME       string  Name of the S3 bucket to send CloudTrail logs to
+bucket_region     us-west-2       string  Region where to enable global events logging
+sns_topic_name    CHANGE ME       string  Name of the SNS topic for CloudTrail log delivery
+sqs_queue_account CHANGE ME       string  Name of the account (must exist) which owns the SQS queue for CloudTrail log delivery notifications
+sqs_queue_name    SET ME          string  Name of the SQS queue
+sqs_queue_region  us-west-2       string  Region for the SQS queue
+=============     =============   ====    ======
