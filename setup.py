@@ -5,7 +5,7 @@ import setuptools
 
 
 path = os.path.abspath(os.path.dirname(__file__))
-with open(os.path.join(path, 'README.md')) as fd:
+with open(os.path.join(path, 'README.rst')) as fd:
     long_desc = fd.read()
 
 setuptools.setup(
