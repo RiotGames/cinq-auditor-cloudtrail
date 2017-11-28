@@ -57,7 +57,7 @@ setuptools.setup(
         # Supported OS's
         'Operating System :: MacOS :: MacOS X',
         'Operating System :: POSIX :: Linux',
-        'Operating System :: Unix'
+        'Operating System :: Unix',
 
         # Extra metadata
         'Environment :: Console',
