@@ -43,7 +43,8 @@ class CloudTrailAuditor(BaseAuditor):
             'This account must exist in the accounts section of the tool'
         ),
         ConfigOption('sqs_queue_name', 'SET ME', 'string', 'Name of the SQS queue'),
-        ConfigOption('sqs_queue_region', 'us-west-2', 'string', 'Region for the SQS queue')
+        ConfigOption('sqs_queue_region', 'us-west-2', 'string', 'Region for the SQS queue'),
+        ConfigOption('trail_name', 'Cinq_Auditing', 'string', 'Name of the CloudTrail trail to create'),
     )
 
     def run(self, *args, **kwargs):
@@ -113,6 +114,7 @@ class CloudTrail(object):
         # Config settings
         self.global_events_region = dbconfig.get('global_events_region', self.ns, 'us-west-2')
         self.topic_name = dbconfig.get('sns_topic_name', self.ns, 'cloudtrail-log-notification')
+        self.trail_name = dbconfig.get('trail_name', self.ns)
 
         sqs_queue_name = dbconfig.get('sqs_queue_name', self.ns)
         sqs_queue_region = dbconfig.get('sqs_queue_region', self.ns)
@@ -151,7 +153,7 @@ class CloudTrail(object):
 
             else:
                 for trail in trails['trailList']:
-                    if trail['Name'] in ('Default', 'Riot_Auditing') and trail['HomeRegion'] == aws_region:
+                    if trail['Name'] in ('Default', self.trail_name) and trail['HomeRegion'] == aws_region:
                         if trail['IsMultiRegionTrail']:
                             if aws_region != self.global_events_region:
                                 self.log.warning('Deleting non-global trail {} from {}/{}'.format(
@@ -342,7 +344,7 @@ class CloudTrail(object):
         ct = self.session.client('cloudtrail', region_name=region)
 
         ct.create_trail(
-            Name='Riot_Auditing',
+            Name=self.trail_name,
             S3BucketName=bucketName,
             S3KeyPrefix=self.account.account_name,
             IsMultiRegionTrail=True,
