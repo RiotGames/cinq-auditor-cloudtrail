@@ -4,6 +4,7 @@ from botocore.exceptions import ClientError
 from cloud_inquisitor import get_aws_session, AWS_REGIONS
 from cloud_inquisitor.config import dbconfig, ConfigOption
 from cloud_inquisitor.constants import NS_AUDITOR_CLOUDTRAIL, AccountTypes
+from cloud_inquisitor.database import db
 from cloud_inquisitor.plugins import BaseAuditor
 from cloud_inquisitor.schema import Account, AuditLog
 from cloud_inquisitor.utils import get_template
@@ -57,7 +58,10 @@ class CloudTrailAuditor(BaseAuditor):
         Returns:
             None
         """
-        accounts = Account.query.filter(Account.enabled == 1, Account.account_type == AccountTypes.AWS).all()
+        accounts = db.Account.find(
+            Account.enabled == 1,
+            Account.account_type == AccountTypes.AWS
+        )
 
         # S3 Bucket config
         s3_acl = get_template('cloudtrail_s3_bucket_policy.json')
