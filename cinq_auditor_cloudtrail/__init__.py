@@ -34,7 +34,7 @@ class CloudTrailAuditor(BaseAuditor):
         ),
         ConfigOption('bucket_name', 'CHANGE ME', 'string', 'Name of the S3 bucket to send CloudTrail logs to'),
         ConfigOption('bucket_region', 'us-west-2', 'string', 'Region for the S3 bucket for CloudTrail logs'),
-        ConfigOption('global_ct_region', 'us-west-2', 'string', 'Region where to enable the global Cloudtrail'),
+        ConfigOption('global_cloudtrail_region', 'us-west-2', 'string', 'Region where to enable the global Cloudtrail'),
         ConfigOption('sns_topic_name', 'CHANGE ME', 'string', 'Name of the SNS topic for CloudTrail log delivery'),
         ConfigOption(
             'sqs_queue_account',
@@ -116,10 +116,9 @@ class CloudTrail(object):
         self.log = logger
 
         # Config settings
-        self.global_ct_region = dbconfig.get('global_ct_region', self.ns, 'us-west-2')
+        self.global_ct_region = dbconfig.get('global_cloudtrail_region', self.ns, 'us-west-2')
         self.topic_name = dbconfig.get('sns_topic_name', self.ns, 'cloudtrail-log-notification')
         self.trail_name = dbconfig.get('trail_name', self.ns)
-        self.multi_region = True
 
         sqs_queue_name = dbconfig.get('sqs_queue_name', self.ns)
         sqs_queue_region = dbconfig.get('sqs_queue_region', self.ns)
@@ -153,14 +152,17 @@ class CloudTrail(object):
                 if aws_region == self.global_ct_region:
                     self.create_cloudtrail(aws_region)
             else:
-                if not self.multi_region:
-                    # Deleting any regional trails of our chosen name - we only want a global trail
-                    if trails('Name') == self.trail_name:
-                        ct.delete_trail(Name=self.trail_name)
+                for trail in trails:
+                    if trail['Name'] in ('Default', self.trail_name):
+                        if aws_region != self.global_ct_region or trail['Name'] == 'Default':
+                            # Deleting any regional trails of our chosen name or any Default trails
+                            # We only want a global trail of our chosen name
+                            ct.delete_trail(Name=trail['Name'])
 
             trails = ct.describe_trails()
             for trail in trails['trailList']:
-                self.validate_trail_settings(ct, aws_region, trail)
+                if trail['Name'] == self.trail_name:
+                    self.validate_trail_settings(ct, aws_region, trail)
 
     def validate_trail_settings(self, ct, aws_region, trail):
         """Validates logging, SNS and S3 settings for the global trail.
@@ -187,7 +189,6 @@ class CloudTrail(object):
                 aws_region
             ))
             self.create_sns_topic(aws_region)
-            self.subscribe_sns_topic_to_sqs(aws_region)
             self.enable_sns_notification(aws_region, trail['Name'])
 
         if not self.validate_sns_topic_subscription(aws_region):
@@ -213,8 +214,6 @@ class CloudTrail(object):
                 trail['Name'], aws_region
             ))
             self.set_s3_prefix(aws_region, trail['Name'])
-
-        self.toggle_global_events(ct, aws_region)
 
     def create_sns_topic(self, region):
         """Creates an SNS topic if needed. Returns the ARN if the created SNS topic
@@ -328,8 +327,8 @@ class CloudTrail(object):
             Name=self.trail_name,
             S3BucketName=self.bucket_name,
             S3KeyPrefix=self.account.account_name,
-            IsMultiRegionTrail=self.multi_region,
-            IncludeGlobalServiceEvents=(self.multi_region or region == self.global_events_region),
+            IsMultiRegionTrail=True,
+            IncludeGlobalServiceEvents=True,
             SnsTopicName=self.topic_name
         )
         self.log.info('Created CloudTrail for {} in {} ({})'.format(self.account, region, self.bucket_name))
@@ -359,40 +358,6 @@ class CloudTrail(object):
             self.account.account_name,
             region
         ))
-
-    def toggle_global_events(self, region, trail):
-        """Toggle logging of global events (console login, IAM etc).
-
-        Args:
-            region (`str`): Name of the AWS region
-            trail (`dict`): Name of the CloudTrail Trail
-
-        Returns:
-            `None`
-        """
-        new_state = region == self.global_events_region
-
-        # If Global Service Events is off but you're in the global service region, then enable
-        # If Global Service Events is on but you're not in the global service region, then disable
-        if (new_state and not trail['IncludeGlobalServiceEvents']) or \
-                (not new_state and trail['IncludeGlobalServiceEvents']):
-            ct = self.session.client('cloudtrail', region_name=region)
-            AuditLog.log(
-                event='cloudtrail.toggle_global_events',
-                actor=self.ns,
-                data={
-                    'account': self.account.account_name,
-                    'region': region,
-                    'trail_name': trail['Name'],
-                    'new_state': new_state
-                }
-            )
-            ct.update_trail(Name=trail, IncludeGlobalServiceEvents=new_state)
-            self.log.info('Updated IncludeGlobalServiceEvents for trail {} in {}, new state: {}'.format(
-                trail,
-                region,
-                new_state
-            ))
 
     def start_logging(self, region, name):
         """Turn on logging for a CloudTrail Trail
