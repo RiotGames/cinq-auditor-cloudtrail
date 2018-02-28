@@ -34,7 +34,7 @@ class CloudTrailAuditor(BaseAuditor):
         ),
         ConfigOption('bucket_name', 'CHANGE ME', 'string', 'Name of the S3 bucket to send CloudTrail logs to'),
         ConfigOption('bucket_region', 'us-west-2', 'string', 'Region for the S3 bucket for CloudTrail logs'),
-        ConfigOption('global_events_region', 'us-west-2', 'string', 'Region where to enable global events logging'),
+        ConfigOption('global_cloudtrail_region', 'us-west-2', 'string', 'Region where to enable the global Cloudtrail'),
         ConfigOption('sns_topic_name', 'CHANGE ME', 'string', 'Name of the SNS topic for CloudTrail log delivery'),
         ConfigOption(
             'sqs_queue_account',
@@ -116,7 +116,7 @@ class CloudTrail(object):
         self.log = logger
 
         # Config settings
-        self.global_events_region = dbconfig.get('global_events_region', self.ns, 'us-west-2')
+        self.global_ct_region = dbconfig.get('global_cloudtrail_region', self.ns, 'us-west-2')
         self.topic_name = dbconfig.get('sns_topic_name', self.ns, 'cloudtrail-log-notification')
         self.trail_name = dbconfig.get('trail_name', self.ns)
 
@@ -134,110 +134,106 @@ class CloudTrail(object):
 
     @retry
     def run(self):
-        """Configures and enables CloudTrail logging on a single AWS Account.
+        """Configures and enables a CloudTrail trail and logging on a single AWS Account.
+
+        Has the capability to create both single region and multi-region trails.
 
         Will automatically create SNS topics, subscribe to SQS queues and turn on logging for the account in question,
-        aswell as reverting any manual changes to the trails if applicable.
+        as well as reverting any manual changes to the trails if applicable.
 
         Returns:
             None
         """
-        missing = []
-
         for aws_region in AWS_REGIONS:
+            self.log.debug('Checking trails for {}/{}'.format(
+                self.account.account_name,
+                aws_region
+            ))
             ct = self.session.client('cloudtrail', region_name=aws_region)
-            try:
-                trails = ct.describe_trails()
-            except ClientError as ex:
-                self.log.error('Failed to list trails in {} ({}): {}'.format(self.account.account_name, aws_region, ex))
-                raise
+            trails = ct.describe_trails()
 
             if len(trails['trailList']) == 0:
-                missing.append(aws_region)
-
+                if aws_region == self.global_ct_region:
+                    self.create_cloudtrail(aws_region)
             else:
                 for trail in trails['trailList']:
-                    if trail['Name'] in ('Default', self.trail_name) and trail['HomeRegion'] == aws_region:
-                        if trail['IsMultiRegionTrail']:
-                            if aws_region != self.global_events_region:
-                                self.log.warning('Deleting non-global trail {} from {}/{}'.format(
-                                    trail['Name'],
+                    if trail['Name'] in ('Default', self.trail_name):
+                        if aws_region != self.global_ct_region or trail['Name'] == 'Default':
+                            if not trail['IsMultiRegionTrail']:
+                                # Deleting any regional trails of our chosen name or any Default trails
+                                # We only want a global trail of our chosen name
+                                self.log.info('Deleting trail {}/{}/{}'.format(
                                     self.account.account_name,
-                                    aws_region
+                                    aws_region,
+                                    trail['Name']
                                 ))
                                 ct.delete_trail(Name=trail['Name'])
-                            else:
-                                self.log.debug('Global Trail {} is configured in {}/{}'.format(
-                                    trail['Name'],
-                                    self.account.account_name,
-                                    aws_region
-                                ))
 
-                                status = ct.get_trail_status(Name=trail['Name'])
-                                if not status['IsLogging']:
-                                    self.log.warning('Logging is disabled for {} in {}'.format(
-                                        self.account.account_name,
-                                        aws_region
-                                    ))
-                                    self.start_logging(aws_region, trail['Name'])
+            trails = ct.describe_trails()
+            for trail in trails['trailList']:
+                if trail['Name'] == self.trail_name and trail['HomeRegion'] == aws_region:
+                    self.validate_trail_settings(ct, aws_region, trail)
 
-                                if 'SnsTopicName' not in trail or not trail['SnsTopicName']:
-                                    self.log.warning('SNS Notifications not enabled for {} in {}/{}'.format(
-                                        trail['Name'],
-                                        self.account.account_name,
-                                        aws_region
-                                    ))
-                                    self.create_sns_topic(aws_region)
-                                    self.subscribe_sns_topic_to_sqs(aws_region)
-                                    self.enable_sns_notification(aws_region, trail['Name'])
+    def validate_trail_settings(self, ct, aws_region, trail):
+        """Validates logging, SNS and S3 settings for the global trail.
 
-                                if not self.validate_sns_topic_subscription(aws_region):
-                                    self.log.warning(
-                                        'SNS Notification configured but not subscribed for {} in {}/{}'.format(
-                                            trail['Name'],
-                                            self.account.account_name,
-                                            aws_region
-                                        )
-                                    )
-                                    self.subscribe_sns_topic_to_sqs(aws_region)
+        Has the capability to:
 
-                                if trail['S3BucketName'] != self.bucket_name:
-                                    self.log.warning('CloudTrail {} in {} is logging to an incorrect bucket {}'.format(
-                                        trail['Name'],
-                                        self.account.account_name,
-                                        trail['S3BucketName']
-                                    ))
-                                    self.set_s3_bucket(aws_region, trail['Name'], self.bucket_name)
+        - start logging for the trail
+        - create SNS topics & queues
+        - configure or modify a S3 bucket for logging
 
-                                if 'S3KeyPrefix' not in trail or not trail['S3KeyPrefix']:
-                                    self.log.warning('Missing S3KeyPrefix for {} in {}'.format(
-                                        trail['Name'], aws_region
-                                    ))
-                                    self.set_s3_prefix(aws_region, trail['Name'])
+        """
+        self.log.debug('Validating trail {}/{}/{}'.format(
+            self.account.account_name,
+            aws_region,
+            trail['Name']
+        ))
+        status = ct.get_trail_status(Name=trail['Name'])
+        if not status['IsLogging']:
+            self.log.warning('Logging is disabled for {}/{}/{}'.format(
+                self.account.account_name,
+                aws_region,
+                trail['Name']
+            ))
+            self.start_logging(aws_region, trail['Name'])
 
-                                if aws_region == self.global_events_region:
-                                    if not trail['IncludeGlobalServiceEvents']:
-                                        self.log.warning('GlobalEvents not enabled for {} in {}, enabling'.format(
-                                            trail['Name'],
-                                            aws_region
-                                        ))
-                                        self.toggle_global_events(aws_region, trail['Name'], True)
-                                else:
-                                    if trail['IncludeGlobalServiceEvents']:
-                                        self.log.warning('GlobalEvents enabled for {} in {}. Should be {}'.format(
-                                            trail['Name'],
-                                            aws_region,
-                                            self.global_events_region
-                                        ))
-                                        self.toggle_global_events(aws_region, trail['Name'], False)
-                    else:
-                        self.log.debug('Skipping trail {} ({}) in {}/{}'.format(
-                            trail['Name'],
-                            trail['HomeRegion'],
-                            self.account.account_name,
-                            aws_region
-                        ))
+        if 'SnsTopicName' not in trail or not trail['SnsTopicName']:
+            self.log.warning('SNS Notifications not enabled for {}/{}/{}'.format(
+                self.account.account_name,
+                aws_region,
+                trail['Name']
+            ))
+            self.create_sns_topic(aws_region)
+            self.enable_sns_notification(aws_region, trail['Name'])
 
+        if not self.validate_sns_topic_subscription(aws_region):
+            self.log.warning(
+                'SNS Notification configured but not subscribed for {}/{}/{}'.format(
+                    self.account.account_name,
+                    aws_region,
+                    trail['Name']
+                )
+            )
+            self.subscribe_sns_topic_to_sqs(aws_region)
+
+        if trail['S3BucketName'] != self.bucket_name:
+            self.log.warning('CloudTrail is logging to an incorrect bucket for {}/{}/{}'.format(
+                self.account.account_name,
+                trail['S3BucketName'],
+                trail['Name']
+            ))
+            self.set_s3_bucket(aws_region, trail['Name'], self.bucket_name)
+
+        if ('S3KeyPrefix' not in trail or not trail['S3KeyPrefix']) or 'S3KeyPrefix' != self.account.account_name:
+            self.log.warning('Missing or incorrect S3KeyPrefix for {}/{}/{}'.format(
+                self.account.account_name,
+                aws_region,
+                trail['Name']
+            ))
+            self.set_s3_prefix(aws_region, trail['Name'])
+
+    # region helper functions
     def create_sns_topic(self, region):
         """Creates an SNS topic if needed. Returns the ARN if the created SNS topic
 
@@ -327,12 +323,11 @@ class CloudTrail(object):
 
         return topic.attributes['TopicArn']
 
-    def create_cloudtrail(self, region, bucketName):
+    def create_cloudtrail(self, region):
         """Creates a new CloudTrail Trail
 
         Args:
             region (str): Name of the AWS region
-            bucketName (str): Name of the S3 bucket to deliver the logs to
 
         Returns:
             `None`
@@ -347,15 +342,19 @@ class CloudTrail(object):
         )
         ct = self.session.client('cloudtrail', region_name=region)
 
+        # Creating the sns topic for the trail prior to creation
+        self.create_sns_topic(region)
+
         ct.create_trail(
             Name=self.trail_name,
-            S3BucketName=bucketName,
+            S3BucketName=self.bucket_name,
             S3KeyPrefix=self.account.account_name,
             IsMultiRegionTrail=True,
             IncludeGlobalServiceEvents=True,
             SnsTopicName=self.topic_name
         )
-        self.log.info('Created CloudTrail for {} in {} ({})'.format(self.account, region, bucketName))
+        self.subscribe_sns_topic_to_sqs(region)
+        self.log.info('Created CloudTrail for {} in {} ({})'.format(self.account, region, self.bucket_name))
 
     def enable_sns_notification(self, region, trailName):
         """Enable SNS notifications for a Trail
@@ -381,34 +380,6 @@ class CloudTrail(object):
             trailName,
             self.account.account_name,
             region
-        ))
-
-    def toggle_global_events(self, region, trail, state):
-        """Toggle logging of global events (console login, IAM etc).
-
-        Args:
-            region (`str`): Name of the AWS region
-            trail (`str`): Name of the CloudTrail Trail
-            state (`bool`): New state of the `IncludeGlobalServiceEvents` parameter for the Trail
-
-        Returns:
-            `None`
-        """
-        AuditLog.log(
-            event='cloudtrail.toggle_global_events',
-            actor=self.ns,
-            data={
-                'account': self.account.account_name,
-                'region': region,
-                'state': state
-            }
-        )
-        ct = self.session.client('cloudtrail', region_name=region)
-        ct.update_trail(Name=trail, IncludeGlobalServiceEvents=state)
-        self.log.info('Updated IncludeGlobalServiceEvents for trail {} in {}, new state: {}'.format(
-            trail,
-            region,
-            state
         ))
 
     def start_logging(self, region, name):
@@ -491,8 +462,8 @@ class CloudTrail(object):
         """Creates the S3 bucket on the account specified as the destination account for log files
 
         Args:
-            bucket_name (`str`): Name of the S3 bucke
-            bucket_region (`str`): AWS Region for the bucke
+            bucket_name (`str`): Name of the S3 bucket
+            bucket_region (`str`): AWS Region for the bucket
             bucket_account (:obj:`Account`): Account to create the S3 bucket in
             template (:obj:`Template`): Jinja2 Template object for the bucket policy
 
@@ -503,14 +474,14 @@ class CloudTrail(object):
             event='cloudtrail.create_s3_bucket',
             actor=cls.ns,
             data={
-                'account': bucket_account,
+                'account': bucket_account.account_name,
                 'bucket_region': bucket_region,
                 'bucket_name': bucket_name
             }
         )
         s3 = get_aws_session(bucket_account).client('s3', region_name=bucket_region)
 
-        # Check to see if the bucket already exists and if we have access to i
+        # Check to see if the bucket already exists and if we have access to it
         try:
             s3.head_bucket(Bucket=bucket_name)
         except ClientError as ex:
@@ -518,11 +489,11 @@ class CloudTrail(object):
 
             # Bucket exists and we do not have access
             if status_code == 403:
-                raise Exception('Bucket {} already exists and we do not have access to it, cannot continue'.format(
+                raise Exception('Bucket {} already exists but we do not have access to it and so cannot continue'.format(
                     bucket_name
                 ))
 
-            # Bucket does not exist, lets create i
+            # Bucket does not exist, lets create one
             elif status_code == 404:
                 try:
                     s3.create_bucket(
@@ -542,4 +513,5 @@ class CloudTrail(object):
             s3.put_bucket_policy(Bucket=bucket_name, Policy=bucket_acl)
 
         except Exception as ex:
-            raise Warning('An error occured while setting bucket policy: {}'.format(ex))
+            raise Warning('An error occurred while setting bucket policy: {}'.format(ex))
+    # endregion
