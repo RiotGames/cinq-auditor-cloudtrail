@@ -21,7 +21,6 @@ class CloudTrailAuditor(BaseAuditor):
     name = 'CloudTrail'
     ns = NS_AUDITOR_CLOUDTRAIL
     interval = dbconfig.get('interval', ns, 60)
-    enabled = dbconfig.get('enabled', ns, False)
     options = (
         ConfigOption('enabled', False, 'bool', 'Enable the Cloudtrail auditor'),
         ConfigOption('interval', 60, 'int', 'Run frequency in minutes'),
