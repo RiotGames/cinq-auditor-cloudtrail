@@ -6,9 +6,12 @@ cinq-auditor-cloudtrail
 Description
 ===========
 
-This auditor ensures that CloudTrail is enabled and logging to a 
-central location and that SNS/SQS notifications are enabled and being 
-sent to the correct queues for the CloudTrail Logs application.
+This auditor ensures that CloudTrail:
+
+* is enabled globally on multi-region
+* logs to a central location
+* has SNS/SQS notifications enabled and being sent to the correct queues
+* and that regional trails (of our chosen name) are not enabled
 
 =====================
 Configuration Options
