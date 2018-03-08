@@ -469,15 +469,6 @@ class CloudTrail(object):
         Returns:
             `None`
         """
-        AuditLog.log(
-            event='cloudtrail.create_s3_bucket',
-            actor=cls.ns,
-            data={
-                'account': bucket_account.account_name,
-                'bucket_region': bucket_region,
-                'bucket_name': bucket_name
-            }
-        )
         s3 = get_aws_session(bucket_account).client('s3', region_name=bucket_region)
 
         # Check to see if the bucket already exists and if we have access to it
@@ -510,6 +501,16 @@ class CloudTrail(object):
                 account_id=bucket_account.account_number
             )
             s3.put_bucket_policy(Bucket=bucket_name, Policy=bucket_acl)
+
+            AuditLog.log(
+                event='cloudtrail.create_s3_bucket',
+                actor=cls.ns,
+                data={
+                    'account': bucket_account.account_name,
+                    'bucket_region': bucket_region,
+                    'bucket_name': bucket_name
+                }
+            )
 
         except Exception as ex:
             raise Warning('An error occurred while setting bucket policy: {}'.format(ex))
