@@ -224,7 +224,7 @@ class CloudTrail(object):
             ))
             self.set_s3_bucket(aws_region, trail['Name'], self.bucket_name)
 
-        if ('S3KeyPrefix' not in trail or not trail['S3KeyPrefix']) or 'S3KeyPrefix' != self.account.account_name:
+        if not trail.get('S3KeyPrefix') or trail['S3KeyPrefix'] != self.account.account_name:
             self.log.warning('Missing or incorrect S3KeyPrefix for {}/{}/{}'.format(
                 self.account.account_name,
                 aws_region,
