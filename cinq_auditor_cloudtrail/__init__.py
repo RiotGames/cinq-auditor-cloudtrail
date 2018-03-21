@@ -242,14 +242,6 @@ class CloudTrail(object):
         Returns:
             `str`
         """
-        AuditLog.log(
-            event='cloudtrail.create_sns_topic',
-            actor=self.ns,
-            data={
-                'account': self.account.account_name,
-                'region': region
-            }
-        )
         sns = self.session.client('sns', region_name=region)
 
         self.log.info('Creating SNS topic for {}/{}'.format(self.account, region))
@@ -261,6 +253,15 @@ class CloudTrail(object):
         tmpl = get_template('cloudtrail_sns_policy.json')
         policy = tmpl.render(region=region, account_id=self.account.account_number, topic_name=self.topic_name)
         sns.set_topic_attributes(TopicArn=arn, AttributeName='Policy', AttributeValue=policy)
+
+        AuditLog.log(
+            event='cloudtrail.create_sns_topic',
+            actor=self.ns,
+            data={
+                'account': self.account.account_name,
+                'region': region
+            }
+        )
 
         return arn
 
@@ -307,6 +308,11 @@ class CloudTrail(object):
         Returns:
             `str`
         """
+        sns = self.session.resource('sns', region_name=region)
+        topic = sns.Topic('arn:aws:sns:{}:{}:{}'.format(region, self.account.account_number, self.topic_name))
+
+        topic.subscribe(Protocol='sqs', Endpoint=self.sqs_queue)
+
         AuditLog.log(
             event='cloudtrail.subscribe_sns_topic_to_sqs',
             actor=self.ns,
@@ -315,10 +321,6 @@ class CloudTrail(object):
                 'region': region
             }
         )
-        sns = self.session.resource('sns', region_name=region)
-        topic = sns.Topic('arn:aws:sns:{}:{}:{}'.format(region, self.account.account_number, self.topic_name))
-
-        topic.subscribe(Protocol='sqs', Endpoint=self.sqs_queue)
 
         return topic.attributes['TopicArn']
 
@@ -331,14 +333,6 @@ class CloudTrail(object):
         Returns:
             `None`
         """
-        AuditLog.log(
-            event='cloudtrail.create_cloudtrail',
-            actor=self.ns,
-            data={
-                'account': self.account.account_name,
-                'region': region
-            }
-        )
         ct = self.session.client('cloudtrail', region_name=region)
 
         # Creating the sns topic for the trail prior to creation
@@ -353,6 +347,15 @@ class CloudTrail(object):
             SnsTopicName=self.topic_name
         )
         self.subscribe_sns_topic_to_sqs(region)
+
+        AuditLog.log(
+            event='cloudtrail.create_cloudtrail',
+            actor=self.ns,
+            data={
+                'account': self.account.account_name,
+                'region': region
+            }
+        )
         self.log.info('Created CloudTrail for {} in {} ({})'.format(self.account, region, self.bucket_name))
 
     def enable_sns_notification(self, region, trailName):
@@ -365,6 +368,9 @@ class CloudTrail(object):
         Returns:
             `None`
         """
+        ct = self.session.client('cloudtrail', region_name=region)
+        ct.update_trail(Name=trailName, SnsTopicName=self.topic_name)
+
         AuditLog.log(
             event='cloudtrail.enable_sns_notification',
             actor=self.ns,
@@ -373,8 +379,6 @@ class CloudTrail(object):
                 'region': region
             }
         )
-        ct = self.session.client('cloudtrail', region_name=region)
-        ct.update_trail(Name=trailName, SnsTopicName=self.topic_name)
         self.log.info('Enabled SNS notifications for trail {} in {}/{}'.format(
             trailName,
             self.account.account_name,
@@ -391,6 +395,9 @@ class CloudTrail(object):
         Returns:
             `None`
         """
+        ct = self.session.client('cloudtrail', region_name=region)
+        ct.start_logging(Name=name)
+
         AuditLog.log(
             event='cloudtrail.start_logging',
             actor=self.ns,
@@ -399,8 +406,6 @@ class CloudTrail(object):
                 'region': region
             }
         )
-        ct = self.session.client('cloudtrail', region_name=region)
-        ct.start_logging(Name=name)
         self.log.info('Enabled logging for {} ({})'.format(name, region))
 
     def set_s3_prefix(self, region, name):
@@ -413,6 +418,9 @@ class CloudTrail(object):
         Returns:
             `None`
         """
+        ct = self.session.client('cloudtrail', region_name=region)
+        ct.update_trail(Name=name, S3KeyPrefix=self.account.account_name)
+
         AuditLog.log(
             event='cloudtrail.set_s3_prefix',
             actor=self.ns,
@@ -421,8 +429,6 @@ class CloudTrail(object):
                 'region': region
             }
         )
-        ct = self.session.client('cloudtrail', region_name=region)
-        ct.update_trail(Name=name, S3KeyPrefix=self.account.account_name)
         self.log.info('Updated S3KeyPrefix to {0} for {0}/{1}'.format(
             self.account.account_name,
             region
@@ -439,6 +445,9 @@ class CloudTrail(object):
         Returns:
             `None`
         """
+        ct = self.session.client('cloudtrail', region_name=region)
+        ct.update_trail(Name=name, S3BucketName=bucketName)
+
         AuditLog.log(
             event='cloudtrail.set_s3_bucket',
             actor=self.ns,
@@ -447,8 +456,6 @@ class CloudTrail(object):
                 'region': region
             }
         )
-        ct = self.session.client('cloudtrail', region_name=region)
-        ct.update_trail(Name=name, S3BucketName=bucketName)
         self.log.info('Updated S3BucketName to {} for {} in {}/{}'.format(
             bucketName,
             name,
@@ -492,6 +499,16 @@ class CloudTrail(object):
                             'LocationConstraint': bucket_region
                         }
                     )
+
+                    AuditLog.log(
+                        event='cloudtrail.create_s3_bucket',
+                        actor=cls.ns,
+                        data={
+                            'account': bucket_account.account_name,
+                            'bucket_region': bucket_region,
+                            'bucket_name': bucket_name
+                        }
+                    )
                 except Exception:
                     raise Exception('An error occured while trying to create the bucket, cannot continue')
 
@@ -501,16 +518,6 @@ class CloudTrail(object):
                 account_id=bucket_account.account_number
             )
             s3.put_bucket_policy(Bucket=bucket_name, Policy=bucket_acl)
-
-            AuditLog.log(
-                event='cloudtrail.create_s3_bucket',
-                actor=cls.ns,
-                data={
-                    'account': bucket_account.account_name,
-                    'bucket_region': bucket_region,
-                    'bucket_name': bucket_name
-                }
-            )
 
         except Exception as ex:
             raise Warning('An error occurred while setting bucket policy: {}'.format(ex))
