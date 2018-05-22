@@ -5,8 +5,9 @@ from cloud_inquisitor import get_aws_session, AWS_REGIONS
 from cloud_inquisitor.config import dbconfig, ConfigOption
 from cloud_inquisitor.constants import NS_AUDITOR_CLOUDTRAIL, AccountTypes
 from cloud_inquisitor.database import db
+from cloud_inquisitor.log import auditlog
 from cloud_inquisitor.plugins import BaseAuditor
-from cloud_inquisitor.schema import Account, AuditLog
+from cloud_inquisitor.schema import Account
 from cloud_inquisitor.utils import get_template
 from cloud_inquisitor.wrappers import retry
 
@@ -254,7 +255,7 @@ class CloudTrail(object):
         policy = tmpl.render(region=region, account_id=self.account.account_number, topic_name=self.topic_name)
         sns.set_topic_attributes(TopicArn=arn, AttributeName='Policy', AttributeValue=policy)
 
-        AuditLog.log(
+        auditlog(
             event='cloudtrail.create_sns_topic',
             actor=self.ns,
             data={
@@ -313,7 +314,7 @@ class CloudTrail(object):
 
         topic.subscribe(Protocol='sqs', Endpoint=self.sqs_queue)
 
-        AuditLog.log(
+        auditlog(
             event='cloudtrail.subscribe_sns_topic_to_sqs',
             actor=self.ns,
             data={
@@ -348,7 +349,7 @@ class CloudTrail(object):
         )
         self.subscribe_sns_topic_to_sqs(region)
 
-        AuditLog.log(
+        auditlog(
             event='cloudtrail.create_cloudtrail',
             actor=self.ns,
             data={
@@ -371,7 +372,7 @@ class CloudTrail(object):
         ct = self.session.client('cloudtrail', region_name=region)
         ct.update_trail(Name=trailName, SnsTopicName=self.topic_name)
 
-        AuditLog.log(
+        auditlog(
             event='cloudtrail.enable_sns_notification',
             actor=self.ns,
             data={
@@ -398,7 +399,7 @@ class CloudTrail(object):
         ct = self.session.client('cloudtrail', region_name=region)
         ct.start_logging(Name=name)
 
-        AuditLog.log(
+        auditlog(
             event='cloudtrail.start_logging',
             actor=self.ns,
             data={
@@ -421,7 +422,7 @@ class CloudTrail(object):
         ct = self.session.client('cloudtrail', region_name=region)
         ct.update_trail(Name=name, S3KeyPrefix=self.account.account_name)
 
-        AuditLog.log(
+        auditlog(
             event='cloudtrail.set_s3_prefix',
             actor=self.ns,
             data={
@@ -448,7 +449,7 @@ class CloudTrail(object):
         ct = self.session.client('cloudtrail', region_name=region)
         ct.update_trail(Name=name, S3BucketName=bucketName)
 
-        AuditLog.log(
+        auditlog(
             event='cloudtrail.set_s3_bucket',
             actor=self.ns,
             data={
@@ -500,7 +501,7 @@ class CloudTrail(object):
                         }
                     )
 
-                    AuditLog.log(
+                    auditlog(
                         event='cloudtrail.create_s3_bucket',
                         actor=cls.ns,
                         data={
