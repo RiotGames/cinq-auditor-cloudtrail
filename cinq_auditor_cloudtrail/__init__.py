@@ -158,16 +158,50 @@ class CloudTrail(object):
             else:
                 for trail in trails['trailList']:
                     if trail['Name'] in ('Default', self.trail_name):
-                        if aws_region != self.global_ct_region or trail['Name'] == 'Default':
-                            if not trail['IsMultiRegionTrail']:
-                                # Deleting any regional trails of our chosen name or any Default trails
-                                # We only want a global trail of our chosen name
-                                self.log.info('Deleting trail {}/{}/{}'.format(
-                                    self.account.account_name,
-                                    aws_region,
-                                    trail['Name']
-                                ))
+                        if not trail['IsMultiRegionTrail']:
+                            if trail['Name'] == self.trail_name and self.global_ct_region == aws_region:
+                                ct.update_trail(
+                                    Name=trail['Name'],
+                                    IsMultiRegionTrail=True
+                                )
+                                auditlog(
+                                    event='cloudtrail.update_trail',
+                                    actor=self.ns,
+                                    data={
+                                        'trailName': trail['Name'],
+                                        'region': aws_region,
+                                        'changes': [
+                                            {
+                                                'setting': 'IsMultiRegionTrail',
+                                                'oldValue': False,
+                                                'newValue': True
+                                            }
+                                        ]
+                                    }
+                                )
+                            else:
+                                ct.delete_trail(name=trail['Name'])
+                                auditlog(
+                                    event='cloudtrail.delete_trail',
+                                    actor=self.ns,
+                                    data={
+                                        'trailName': trail['Name'],
+                                        'region': aws_region,
+                                        'reason': 'Incorrect region, name or not multi-regional'
+                                    }
+                                )
+                        else:
+                            if self.global_ct_region != aws_region or trail['Name'] == 'Default':
                                 ct.delete_trail(Name=trail['Name'])
+                                auditlog(
+                                    event='cloudtrail.delete_trail',
+                                    actor=self.ns,
+                                    data={
+                                        'trailName': trail['Name'],
+                                        'region': aws_region,
+                                        'reason': 'Incorrect name or region for multi-region trail'
+                                    }
+                                )
 
             trails = ct.describe_trails()
             for trail in trails['trailList']:
