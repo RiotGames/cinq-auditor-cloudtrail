@@ -3,11 +3,10 @@ import json
 from botocore.exceptions import ClientError
 from cloud_inquisitor import get_aws_session, AWS_REGIONS
 from cloud_inquisitor.config import dbconfig, ConfigOption
-from cloud_inquisitor.constants import NS_AUDITOR_CLOUDTRAIL, AccountTypes
-from cloud_inquisitor.database import db
+from cloud_inquisitor.constants import NS_AUDITOR_CLOUDTRAIL
 from cloud_inquisitor.log import auditlog
 from cloud_inquisitor.plugins import BaseAuditor
-from cloud_inquisitor.schema import Account
+from cloud_inquisitor.plugins.types.accounts import AWSAccount
 from cloud_inquisitor.utils import get_template
 from cloud_inquisitor.wrappers import retry
 
@@ -58,16 +57,13 @@ class CloudTrailAuditor(BaseAuditor):
         Returns:
             None
         """
-        accounts = db.Account.find(
-            Account.enabled == 1,
-            Account.account_type == AccountTypes.AWS
-        )
+        accounts = list(AWSAccount.get_all(include_disabled=False).values())
 
         # S3 Bucket config
         s3_acl = get_template('cloudtrail_s3_bucket_policy.json')
         s3_bucket_name = self.dbconfig.get('bucket_name', self.ns)
         s3_bucket_region = self.dbconfig.get('bucket_region', self.ns, 'us-west-2')
-        s3_bucket_account = Account.get(self.dbconfig.get('bucket_account', self.ns))
+        s3_bucket_account = AWSAccount.get(self.dbconfig.get('bucket_account', self.ns))
         CloudTrail.create_s3_bucket(s3_bucket_name, s3_bucket_region, s3_bucket_account, s3_acl)
 
         self.validate_sqs_policy(accounts)
@@ -87,7 +83,7 @@ class CloudTrailAuditor(BaseAuditor):
         """
         sqs_queue_name = self.dbconfig.get('sqs_queue_name', self.ns)
         sqs_queue_region = self.dbconfig.get('sqs_queue_region', self.ns)
-        sqs_account = Account.get(self.dbconfig.get('sqs_queue_account', self.ns))
+        sqs_account = AWSAccount.get(self.dbconfig.get('sqs_queue_account', self.ns))
         session = get_aws_session(sqs_account)
 
         sqs = session.client('sqs', region_name=sqs_queue_region)
@@ -122,7 +118,7 @@ class CloudTrail(object):
 
         sqs_queue_name = dbconfig.get('sqs_queue_name', self.ns)
         sqs_queue_region = dbconfig.get('sqs_queue_region', self.ns)
-        sqs_account = Account.get(dbconfig.get('sqs_queue_account', self.ns))
+        sqs_account = AWSAccount.get(dbconfig.get('sqs_queue_account', self.ns))
 
         self.sqs_queue = 'arn:aws:sqs:{}:{}:{}'.format(
             sqs_queue_region,
